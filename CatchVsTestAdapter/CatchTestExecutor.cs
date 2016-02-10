@@ -58,7 +58,7 @@ namespace CatchVsTestAdapter
                 {
                     try
                     {
-                        var result = GetTestResultFromReport(test, reportDocument);
+                        var result = GetTestResultFromReport(test, reportDocument, framework);
                         framework.RecordResult(result);
                     }
                     catch (Exception ex)
@@ -93,7 +93,7 @@ namespace CatchVsTestAdapter
                 try
                 {
                     var reportDocument = RunOrDebugCatchTest(test.Source, test.FullyQualifiedName, context, framework);
-                    var result = GetTestResultFromReport(test, reportDocument);
+                    var result = GetTestResultFromReport(test, reportDocument, framework);
                     framework.RecordResult(result);
                 }
                 catch (Exception ex)
@@ -161,17 +161,19 @@ namespace CatchVsTestAdapter
         /// <summary>
         /// Returns a TestResult for a given test case, populated with the data from the report document.
         /// </summary>
-        internal static TestResult GetTestResultFromReport(TestCase test, XDocument report)
+        internal static TestResult GetTestResultFromReport(TestCase test, XDocument report, IFrameworkHandle framework)
         {
             var result = new TestResult(test);
 
             var testCaseElement = GetTestCaseElement(report, test.FullyQualifiedName);
             result.Outcome = GetTestOutcome(testCaseElement);
             result.ErrorMessage = GetTestMessage(testCaseElement);
+            if (result.Outcome == TestOutcome.Failed)
+                result.ErrorStackTrace = GetStacktrace(testCaseElement);
 
             try
             {
-                result.Duration = GetTestDuration(testCaseElement);
+                result.Duration = GetTestDuration(testCaseElement, framework);
             }
             catch { } //< Older versions of catch do not include the duration in the xml report.
 
@@ -244,15 +246,16 @@ namespace CatchVsTestAdapter
             var message = new StringBuilder { };
 
             // If this is a failed section, print a header.
-            if (testElement.Name == "Section" && GetTestOutcome(testElement) != TestOutcome.Passed)
+            // We write the sections as the stack trace
+            /*if (testElement.Name == "Section" && GetTestOutcome(testElement) != TestOutcome.Passed)
             {
-                message.AppendFormat("Section \"{0}\":\n", testElement.Attribute("name").Value);
-            }
+                message.AppendLine(SourceLocation.FromXElement(testElement).ToStacktraceString(testElement.Attribute("name").Value));
+            }*/
 
             // First, recurse over all section elements.
             foreach (var sectionNode in testElement.Elements("Section"))
             {
-                message.AppendLine(GetTestMessage(sectionNode));
+                message.Append(GetTestMessage(sectionNode));
             }
 
             // Print failed expressions...
@@ -327,14 +330,55 @@ namespace CatchVsTestAdapter
             return message.ToString();
         }
 
+        internal static string GetStacktrace(XElement testElement)
+        {
+            var message = new StringBuilder { };
+
+            message.AppendLine(SourceLocation.FromXElement(testElement).ToStacktraceString(testElement.Attribute("name").Value));
+
+            // recurse over all section elements.
+            foreach (var sectionNode in testElement.Elements("Section"))
+            {
+                message.AppendLine(GetStacktrace(sectionNode));
+                return message.ToString();
+            }
+
+            // unexpected exceptions...
+            foreach (var exceptionElement in testElement.Elements("Exception"))
+            {
+                message.AppendLine(SourceLocation.FromXElement(exceptionElement).ToStacktraceString("Exception"));
+            }
+
+            // Print failed expressions...
+            foreach (var expressionElement in testElement.Elements("Expression"))
+            {
+                if (expressionElement.Attribute("success").Value.Trim().ToLower() == "false")
+                {
+                    var type = expressionElement.Attribute("type");
+                    var typeStr = "Expression";
+                    if (type != null)
+                        typeStr = type.Value;
+                    message.AppendLine(SourceLocation.FromXElement(expressionElement).ToStacktraceString(typeStr));
+                }
+            }
+
+            // fatal error conditions...
+            foreach (var fatalElement in testElement.Elements("FatalErrorCondition"))
+            {
+                message.AppendLine(SourceLocation.FromXElement(fatalElement).ToStacktraceString("FatalErrorCondition"));
+            }
+
+            return message.ToString();
+        }
 
         /// <summary>
         /// Returns the duration of a given test based on its xml element.
         /// </summary>
-        internal static TimeSpan GetTestDuration(XElement testCaseElement)
+        internal static TimeSpan GetTestDuration(XElement testCaseElement, IFrameworkHandle framework)
         {
             var durationAttr = testCaseElement.Descendants("OverallResult").First().Attribute("durationInSeconds");
-            return TimeSpan.FromSeconds(double.Parse(durationAttr.Value, CultureInfo.InvariantCulture));
+            var dblVal = double.Parse(durationAttr.Value, CultureInfo.InvariantCulture);
+            return TimeSpan.FromMilliseconds(dblVal * 1000);
         }
 
 
