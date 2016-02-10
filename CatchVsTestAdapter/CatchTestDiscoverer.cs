@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Adapter;
 using Microsoft.VisualStudio.TestPlatform.ObjectModel.Logging;
+using System.Xml.Linq;
 
 namespace CatchVsTestAdapter
 {
@@ -13,28 +14,60 @@ namespace CatchVsTestAdapter
     [DefaultExecutorUri(CatchTestExecutor.ExecutorUriString)]
     public class CatchTestDiscoverer : ITestDiscoverer
     {
+        static private IMessageLogger currentLogger;
+
         /// <summary>
         /// Finds tests in Catch unit test binaries. Note: We have to run the binary to enumerate tests.
         /// </summary>
         /// <param name="sources">Binaries to search for tests.</param>
         public void DiscoverTests(IEnumerable<string> sources, IDiscoveryContext context, IMessageLogger logger, ITestCaseDiscoverySink discoverySink)
         {
-            var catchBinaries = sources.Where(isSourceACatchTestBinary);
+            currentLogger = logger;
 
-            var tests = ListTestsInBinaries(catchBinaries);
-
-            foreach (var testCase in tests)
+            foreach (var source in sources)
             {
-                discoverySink.SendTestCase(testCase);
+                switch (checkCatchTestBinaryFormat(source))
+                {
+                    case CatchBinaryFormat.NoCatchTestBinary:
+                        continue;
+                    case CatchBinaryFormat.CatchTestBinary:
+                        foreach (var testCase in ListTestsInBinary(source))
+                        {
+                            discoverySink.SendTestCase(testCase);
+                        }
+                        continue;
+                    case CatchBinaryFormat.CatchTestBinaryWithXmlTestList:
+                        foreach (var testCase in ListTestsInBinaryXml(source))
+                        {
+                            discoverySink.SendTestCase(testCase);
+                        }
+                        break;
+                }
             }
         }
 
-        internal static bool isSourceACatchTestBinary(string source)
+        internal enum CatchBinaryFormat
+        {
+            NoCatchTestBinary,
+            CatchTestBinary,
+            CatchTestBinaryWithXmlTestList
+        }
+
+        internal static CatchBinaryFormat checkCatchTestBinaryFormat(string source)
         {
             // This is a dirty hack to detect whether a binary is a catch test.
             // We really need to know since to detect tests, the binary needs to be run.
             var fileContents = File.ReadAllText(source);
-            return fileContents.Contains("--list-tests") && fileContents.Contains("--list-tags");
+
+            if (fileContents.Contains("--list-tests") && fileContents.Contains("--list-tags"))
+            {
+                if (fileContents.Contains("CatchTestList"))
+                    return CatchBinaryFormat.CatchTestBinaryWithXmlTestList;
+
+                return CatchBinaryFormat.CatchTestBinary;
+            }
+
+            return CatchBinaryFormat.NoCatchTestBinary;
         }
 
         internal static IEnumerable<TestCase> ListTestsInBinaries(IEnumerable<string> sources)
@@ -44,6 +77,35 @@ namespace CatchVsTestAdapter
             foreach (var source in sources)
             {
                 tests.AddRange(ListTestsInBinary(source));
+            }
+
+            return tests;
+        }
+        internal static IEnumerable<TestCase> ListTestsInBinaryXml(string source)
+        {
+            currentLogger.SendMessage(TestMessageLevel.Informational, "Parsing tests from " + source);
+
+            var tests = new List<TestCase>();
+
+            var listOutput = Utility.runExe(source, "--list-tests", "-r", "xml");
+            currentLogger.SendMessage(TestMessageLevel.Informational, "Tests executed");
+
+            var xdoc = XDocument.Parse(listOutput);
+            currentLogger.SendMessage(TestMessageLevel.Informational, "Xml parsed");
+
+            foreach (var xTest in xdoc.Element("CatchTestList").Elements("TestCase"))
+            {
+                currentLogger.SendMessage(TestMessageLevel.Informational, "Reading test");
+
+                var name = xTest.Attribute("name").Value;
+                String fullQualifiedName = name;
+                currentLogger.SendMessage(TestMessageLevel.Informational, "Processing test " + fullQualifiedName);
+
+                var test = new TestCase(fullQualifiedName, CatchTestExecutor.ExecutorUri, source);
+                test.LineNumber = Int32.Parse(xTest.Element("Source").Attribute("line").Value);
+                test.CodeFilePath = xTest.Element("Source").Attribute("filename").Value;
+
+                tests.Add(test);
             }
 
             return tests;
