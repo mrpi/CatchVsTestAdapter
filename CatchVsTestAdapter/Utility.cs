@@ -16,6 +16,7 @@ namespace CatchVsTestAdapter
             p.StartInfo.RedirectStandardOutput = true;
             p.StartInfo.FileName = exe;
             p.StartInfo.Arguments = escapeArguments(args);
+            p.StartInfo.StandardOutputEncoding = System.Text.Encoding.UTF8;
 
             p.Start();
             var stdout = p.StandardOutput.ReadToEnd();

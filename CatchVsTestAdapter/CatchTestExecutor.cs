@@ -168,6 +168,9 @@ namespace CatchVsTestAdapter
             var testCaseElement = GetTestCaseElement(report, test.FullyQualifiedName);
             result.Outcome = GetTestOutcome(testCaseElement);
             result.ErrorMessage = GetTestMessage(testCaseElement);
+            if (result.ErrorMessage.EndsWith("\r\n"))
+                result.ErrorMessage = result.ErrorMessage.Substring(0, result.ErrorMessage.Length - 2);
+
             if (result.Outcome == TestOutcome.Failed)
                 result.ErrorStackTrace = GetStacktrace(testCaseElement);
 
@@ -182,7 +185,7 @@ namespace CatchVsTestAdapter
 
 
         /// <summary>
-        /// Returns the &lt;TestCase&gt; element with the fiven name in a report document.
+        /// Returns the &lt;TestCase&gt; element with the given name in a report document.
         /// Throws if that test case does not exist in the document.
         /// </summary>
         internal static XElement GetTestCaseElement(XDocument reportDocument, string testName)
@@ -339,8 +342,11 @@ namespace CatchVsTestAdapter
             // recurse over all section elements.
             foreach (var sectionNode in testElement.Elements("Section"))
             {
-                message.AppendLine(GetStacktrace(sectionNode));
-                return message.ToString();
+                if (GetTestOutcome(sectionNode) != TestOutcome.Passed)
+                {
+                    message.AppendLine(GetStacktrace(sectionNode));
+                    return message.ToString();
+                }
             }
 
             // unexpected exceptions...
