@@ -105,6 +105,11 @@ namespace CatchVsTestAdapter
                 test.LineNumber = Int32.Parse(xTest.Element("Source").Attribute("line").Value);
                 test.CodeFilePath = xTest.Element("Source").Attribute("filename").Value;
 
+                foreach (var xTag in xTest.Element("Tags").Elements("Tag"))
+                {
+                    test.Traits.Add("Tags", xTag.Attribute("name").Value);
+                }
+
                 tests.Add(test);
             }
 
